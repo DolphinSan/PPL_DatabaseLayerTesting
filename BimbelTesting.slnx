@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Bimbel.Data/Bimbel.Data.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Bimbel.Data.Tests/Bimbel.Data.Tests.csproj" />
+  </Folder>
+</Solution>
