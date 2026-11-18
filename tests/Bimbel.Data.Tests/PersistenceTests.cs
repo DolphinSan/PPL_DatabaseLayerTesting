@@ -14,9 +14,6 @@ namespace Bimbel.Data.Tests;
 /// </summary>
 public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
 {
-    // ------------------------------------------------------------------
-    // A. PERSISTENCE: simpan dan baca data
-    // ------------------------------------------------------------------
 
     [Fact]
     public async Task Save_graph_then_read_it_back_with_a_new_context()
@@ -89,9 +86,6 @@ public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
         Assert.Null(await read.Students.FindAsync(id));
     }
 
-    // ------------------------------------------------------------------
-    // B. MIGRATIONS: skema tabel
-    // ------------------------------------------------------------------
 
     [Fact]
     public async Task Migrations_build_the_whole_schema_from_an_empty_database()
@@ -139,9 +133,6 @@ public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
             "Model berbeda dari migration terakhir. Jalankan `dotnet ef migrations add`.");
     }
 
-    // ------------------------------------------------------------------
-    // C. MAPPING: tipe kolom, enum, presisi harga
-    // ------------------------------------------------------------------
 
     [Theory]
     [InlineData("courses", "Price", "numeric(12,2)")]
