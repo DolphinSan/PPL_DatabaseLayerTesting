@@ -7,17 +7,6 @@ using Xunit;
 
 namespace Bimbel.Data.Tests;
 
-/// <summary>
-/// Pengujian Relationships dan Constraints pada Database Bimbel menggunakan EF Core & Testcontainers PostgreSQL.
-/// Disusun oleh: DANEN
-/// Cakupan:
-/// 1. Foreign Key Constraints (Course -> Mentor, Enrollment -> Student/Course, CourseSession -> Course)
-/// 2. Unique Constraints (Mentor Email, Student Email, Enrollment [StudentId, CourseId])
-/// 3. Cascade Delete (Course -> Sessions & Enrollments, Student -> Enrollments)
-/// 4. Restrict Delete (Mentor -> Courses)
-/// 5. Check Constraints (CourseSession DurationMinutes > 0)
-/// 6. Skenario Test Gagal untuk Keperluan Demo
-/// </summary>
 public class ConstraintTests : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _dbContainer = new PostgreSqlBuilder("postgres:16-alpine")
@@ -51,9 +40,6 @@ public class ConstraintTests : IAsyncLifetime
         return new BimbelDbContext(options);
     }
 
-    // ==============================================================================================
-    // 1. FOREIGN KEY CONSTRAINTS
-    // ==============================================================================================
 
     [Fact]
     public async Task ForeignKey_MenambahkanCourseDenganMentorTidakValid_HarusGagal()
@@ -119,9 +105,6 @@ public class ConstraintTests : IAsyncLifetime
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, postgresException.SqlState);
     }
 
-    // ==============================================================================================
-    // 2. UNIQUE CONSTRAINTS
-    // ==============================================================================================
 
     [Fact]
     public async Task Unique_MenambahkanDuaMentorDenganEmailSama_HarusGagal()
@@ -205,9 +188,6 @@ public class ConstraintTests : IAsyncLifetime
         Assert.Equal(PostgresErrorCodes.UniqueViolation, postgresException.SqlState);
     }
 
-    // ==============================================================================================
-    // 3. CASCADE DELETE
-    // ==============================================================================================
 
     [Fact]
     public async Task CascadeDelete_MenghapusCourse_HarusMenghapusSemuaSessionsDanEnrollmentsTerkait()
@@ -289,9 +269,6 @@ public class ConstraintTests : IAsyncLifetime
         Assert.True(await verifyContext.Courses.AnyAsync(c => c.Id == course.Id));
     }
 
-    // ==============================================================================================
-    // 4. RESTRICT DELETE
-    // ==============================================================================================
 
     [Fact]
     public async Task RestrictDelete_MenghapusMentorYangMasihMemilikiCourse_HarusGagal()
@@ -341,9 +318,6 @@ public class ConstraintTests : IAsyncLifetime
         Assert.False(exists, "Mentor tanpa relasi kursus harus berhasil dihapus.");
     }
 
-    // ==============================================================================================
-    // 5. CHECK CONSTRAINTS
-    // ==============================================================================================
 
     [Fact]
     public async Task CheckConstraint_MenambahkanSesiDenganDurasiNolAtauNegatif_HarusGagal()
@@ -422,9 +396,6 @@ public class ConstraintTests : IAsyncLifetime
         Assert.Equal(120, sessionFromDb.DurationMinutes);
     }
 
-    // ==============================================================================================
-    // 6. SKENARIO TEST GAGAL UNTUK KEPERLUAN DEMO
-    // ==============================================================================================
 
     /// <summary>
     /// SKENARIO DEMO GAGAL:
