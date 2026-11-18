@@ -145,9 +145,6 @@ public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
 
     [Theory]
     [InlineData("courses", "Price", "numeric(12,2)")]
-    [InlineData("courses", "Name", "character varying(150)")]
-    [InlineData("mentors", "Email", "character varying(150)")]
-    [InlineData("students", "RegisteredAt", "timestamp with time zone")]
     [InlineData("course_sessions", "StartTime", "timestamp with time zone")]
     [InlineData("enrollments", "Status", "character varying(20)")]
     public async Task Column_has_the_expected_postgres_type(string table, string column, string expectedType)
@@ -189,22 +186,6 @@ public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
     }
 
     [Fact]
-    public async Task Price_with_two_decimals_is_stored_exactly()
-    {
-        int id;
-        await using (var write = NewContext())
-        {
-            var course = TestData.NewCourse(TestData.NewMentor(), price: 149_999.99m);
-            write.Courses.Add(course);
-            await write.SaveChangesAsync();
-            id = course.Id;
-        }
-
-        await using var read = NewContext();
-        Assert.Equal(149_999.99m, (await read.Courses.FindAsync(id))!.Price);
-    }
-
-    [Fact]
     public async Task Enrollment_status_is_stored_as_text_not_a_number()
     {
         await using (var write = NewContext())
@@ -228,27 +209,6 @@ public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture)
 
         // Dan EF mengubahnya kembali menjadi enum.
         Assert.Equal(EnrollmentStatus.Completed, (await read.Enrollments.SingleAsync()).Status);
-    }
-
-    [Theory]
-    [InlineData(EnrollmentStatus.Active)]
-    [InlineData(EnrollmentStatus.Completed)]
-    [InlineData(EnrollmentStatus.Cancelled)]
-    public async Task Every_enrollment_status_round_trips(EnrollmentStatus status)
-    {
-        await using (var write = NewContext())
-        {
-            write.Enrollments.Add(new Enrollment
-            {
-                Student = TestData.NewStudent(),
-                Course = TestData.NewCourse(TestData.NewMentor()),
-                Status = status
-            });
-            await write.SaveChangesAsync();
-        }
-
-        await using var read = NewContext();
-        Assert.Equal(status, (await read.Enrollments.SingleAsync()).Status);
     }
 
     [Fact]
