@@ -1,264 +1,278 @@
 # Bimbel Testing: Database Layer Testing dengan Testcontainers, EF Core & PostgreSQL
 
-Proyek ini adalah implementasi pengujian lapisan database (*Database Layer Testing*) untuk sistem bimbingan belajar (Bimbel) menggunakan **Entity Framework Core**, **PostgreSQL asli**, dan **Testcontainers for .NET**.
+Tugas Eksplorasi PPL (M) - Kelompok 1
+Anggota: Oktavian Ramadhan, Kadek Angga Wistara, Danendra Nayottama H., M. Khalid Ash Shidiqqi
 
-Pendekatan ini menjamin bahwa seluruh pengujian constraint, relasi, migrasi, tipe data spesifik PostgreSQL, dan transaksi diuji langsung pada database nyata di dalam container terisolasi, bukan sekadar database tiruan (*mock* / *in-memory*).
+## 1. Pengenalan Singkat
 
----
+Tutorial ini menguji **lapisan database** (persistence, migrations, mapping, relationships, constraints) memakai **Testcontainers**, **EF Core**, dan **PostgreSQL asli** di dalam container Docker. Studi kasusnya sistem bimbingan belajar (Bimbel) dengan 5 tabel: `mentors`, `courses`, `course_sessions`, `students`, `enrollments`
 
-## 📋 Daftar Isi
-1. [Prasyarat Sistem](#-prasyarat-sistem)
-2. [Penting: Konfigurasi Akses Docker (Linux / macOS / Windows)](#-penting-konfigurasi-akses-docker)
-3. [Struktur Proyek](#-struktur-proyek)
-4. [Skema Database & Relasi (ERD)](#-skema-database--relasi-erd)
-5. [Arsitektur & Pola Pengujian](#-arsitektur--pola-pengujian)
-6. [Instalasi & Build](#-instalasi--build)
-7. [Prosedur & Cara Menjalankan Test](#-prosedur--cara-menjalankan-test)
-8. [Cakupan Pengujian](#-cakupan-pengujian)
-   - [Bagian KADEK: Persistence, Migrations & Mapping](#a-bagian-kadek-persistencetestscs)
-   - [Bagian DANEN: Relationships & Constraints](#b-bagian-danen-constrainttestscs)
+Database in-memory dan SQLite tidak cukup karena foreign key, check constraint, dan delete behavior tidak berperilaku seperti PostgreSQL, dan migration tidak benar-benar dijalankan. Akibatnya test bisa hijau di laptop tetapi rusak di production
 
----
+- **Testcontainers**: menyalakan container PostgreSQL lewat Docker, memakai port acak, menunggu database siap, lalu menghapus container setelah test selesai
+- **EF Core + Npgsql**: ORM, migration, dan mapping (Fluent API) ke PostgreSQL
+- **xUnit**: test framework dan pengelola fixture
 
-## 💻 Prasyarat Sistem
+Alur: satu container PostgreSQL dinyalakan, migration dijalankan, semua test berjalan (tabel dikosongkan dengan `TRUNCATE` sebelum tiap test), lalu container dihapus otomatis
+
+## 2. Persiapan Lingkungan
+
 - **.NET SDK 10.0+** (`dotnet --version`)
-- **Docker Engine / Docker Desktop** yang sedang aktif (`docker --version`)
-- **EF Core CLI Tool** (opsional untuk migrasi baru):
-  ```bash
-  dotnet tool install --global dotnet-ef
-  ```
+- **Docker Desktop** (Windows/macOS) atau Docker Engine (Linux), harus **sedang berjalan** (`docker info` tidak error)
+- **EF Core CLI**: `dotnet tool install --global dotnet-ef`
+- IDE: VS Code, Visual Studio, atau Rider
 
----
+Windows/macOS: buka Docker Desktop dan tunggu status **Engine running**
 
-## 🐳 Penting: Konfigurasi Akses Docker
+> Run pertama butuh internet untuk mengunduh image `postgres:16-alpine`.
 
-Testcontainers berkomunikasi langsung dengan Docker daemon melalui socket (`/var/run/docker.sock`). Pastikan user Anda memiliki izin mengakses Docker tanpa `sudo`.
+## 3. Instalasi
 
-### Untuk Pengguna Linux:
-Jika muncul pesan error `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`:
-1. Masukkan akun pengguna ke grup `docker`:
-   ```bash
-   sudo usermod -aG docker $USER
-   ```
-2. Aktifkan perubahan grup langsung di sesi terminal:
-   ```bash
-   newgrp docker
-   ```
-   *(Atau alternatif cepat untuk sesi pengujian lokal: `sudo chmod 666 /var/run/docker.sock`)*
-3. Pastikan daemon Docker menyala:
-   ```bash
-   sudo systemctl start docker
-   docker ps
-   ```
+```bash
+git clone https://github.com/DolphinSan/PPL_DatabaseLayerTesting.git
+cd PPL_DatabaseLayerTesting
+dotnet restore
+dotnet build
+```
 
-### Untuk Pengguna Windows / macOS:
-- Pastikan aplikasi **Docker Desktop** sudah dibuka dan berstatus *Engine running*.
-- Pada Docker Desktop Settings > *Advanced*, pastikan *Expose daemon on tcp://localhost:2375 without TLS* atau default named pipe aktif.
+Source code aplikasi ada di `src/Bimbel.Data/` dan source code pengujian di `tests/Bimbel.Data.Tests/`
 
----
+## 4. Langkah Implementasi Pengujian
 
-## 📁 Struktur Proyek
+**Langkah 1. Buat solution dan paket.**
+```bash
+dotnet new sln -n BimbelTesting
+dotnet new classlib -n Bimbel.Data -o src/Bimbel.Data
+dotnet new classlib -n Bimbel.Data.Tests -o tests/Bimbel.Data.Tests
+dotnet sln add src/Bimbel.Data tests/Bimbel.Data.Tests
+dotnet add tests/Bimbel.Data.Tests reference src/Bimbel.Data
 
+dotnet add src/Bimbel.Data package Microsoft.EntityFrameworkCore
+dotnet add src/Bimbel.Data package Microsoft.EntityFrameworkCore.Design
+dotnet add src/Bimbel.Data package Npgsql.EntityFrameworkCore.PostgreSQL
+dotnet add tests/Bimbel.Data.Tests package Microsoft.NET.Test.Sdk
+dotnet add tests/Bimbel.Data.Tests package xunit --version 2.9.3
+dotnet add tests/Bimbel.Data.Tests package xunit.runner.visualstudio
+dotnet add tests/Bimbel.Data.Tests package Testcontainers.PostgreSql
+```
+
+**Langkah 2. Buat entitas** `Mentor`, `Course`, `CourseSession`, `Student`, `Enrollment`, dan enum `EnrollmentStatus` di `src/Bimbel.Data/Entities/`. Contoh:
+```csharp
+public class Course
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public int MentorId { get; set; }
+    public Mentor Mentor { get; set; } = null!;
+    public List<CourseSession> Sessions { get; set; } = new();
+    public List<Enrollment> Enrollments { get; set; } = new();
+}
+```
+
+**Langkah 3. Buat `BimbelDbContext`** dan konfigurasi Fluent API per entitas di `src/Bimbel.Data/Configurations/`:
+```csharp
+// DbContext memuat semua konfigurasi sekaligus
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+    => modelBuilder.ApplyConfigurationsFromAssembly(typeof(BimbelDbContext).Assembly);
+```
+Konfigurasi penting:
+```csharp
+// Mapping: presisi harga
+builder.Property(c => c.Price).HasColumnType("numeric(12,2)");
+
+// Mapping: enum disimpan sebagai teks + unique index komposit
+builder.Property(e => e.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+builder.HasIndex(e => new { e.StudentId, e.CourseId }).IsUnique();
+
+builder.HasIndex(m => m.Email).IsUnique();
+
+// Relationship: hapus mentor ditolak bila masih punya course
+builder.HasMany(m => m.Courses).WithOne(c => c.Mentor)
+       .HasForeignKey(c => c.MentorId).OnDelete(DeleteBehavior.Restrict);
+
+// Relationship: hapus course ikut menghapus sessions
+builder.HasMany(c => c.Sessions).WithOne(s => s.Course)
+       .HasForeignKey(s => s.CourseId).OnDelete(DeleteBehavior.Cascade);
+
+builder.ToTable("course_sessions", t => t.HasCheckConstraint(
+    "ck_course_sessions_duration_positive", "\"DurationMinutes\" > 0"));
+```
+
+**Langkah 4. Buat migration.** Tambahkan `BimbelDbContextFactory` (`IDesignTimeDbContextFactory<BimbelDbContext>`) agar `dotnet ef` bisa membuat DbContext tanpa database berjalan, lalu:
+```bash
+dotnet ef migrations add InitialCreate --project src/Bimbel.Data
+```
+
+**Langkah 5. Buat fixture Testcontainers** (`tests/Bimbel.Data.Tests/Infrastructure/PostgresFixture.cs`). Satu container dipakai semua test:
+```csharp
+public sealed class PostgresFixture : IAsyncLifetime
+{
+    private readonly PostgreSqlContainer _container =
+        new PostgreSqlBuilder("postgres:16-alpine").Build();
+
+    public string ConnectionString => _container.GetConnectionString();
+
+    public async Task InitializeAsync()
+    {
+        await _container.StartAsync();
+        await using var context = CreateContext();
+        await context.Database.MigrateAsync();   // migration rusak = semua test gagal di sini
+    }
+
+    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+
+    public BimbelDbContext CreateContext() => CreateContext(ConnectionString);
+
+    public static BimbelDbContext CreateContext(string connectionString) =>
+        new(new DbContextOptionsBuilder<BimbelDbContext>().UseNpgsql(connectionString).Options);
+}
+
+[CollectionDefinition(Name)]
+public class DatabaseCollection : ICollectionFixture<PostgresFixture>
+{
+    public const string Name = "database";
+}
+```
+
+**Langkah 6. Buat base class** (`DatabaseTest.cs`) agar tiap test mulai dari tabel kosong dan bisa menangkap error asli PostgreSQL:
+```csharp
+[Collection(DatabaseCollection.Name)]
+public abstract class DatabaseTest(PostgresFixture fixture) : IAsyncLifetime
+{
+    protected PostgresFixture Fixture { get; } = fixture;
+
+    // Context BARU = data dibaca dari database, bukan dari change tracker
+    protected BimbelDbContext NewContext() => Fixture.CreateContext();
+
+    public async Task InitializeAsync()
+    {
+        await using var context = NewContext();
+        await context.Database.ExecuteSqlRawAsync(
+            "TRUNCATE TABLE enrollments, course_sessions, courses, students, mentors RESTART IDENTITY CASCADE");
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    protected static async Task<PostgresException> AssertViolationAsync(Func<Task> action)
+    {
+        var ex = await Assert.ThrowsAsync<DbUpdateException>(action);
+        return Assert.IsType<PostgresException>(ex.InnerException);
+    }
+}
+```
+Tambahkan juga `TestData.cs` (pembuat `Mentor`, `Student`, `Course`, `CourseSession` dengan email unik) seperti di repo.
+
+**Langkah 7. Tulis test.** Class test mewarisi `DatabaseTest`:
+```csharp
+public class PersistenceTests(PostgresFixture fixture) : DatabaseTest(fixture) { ... }
+public class ConstraintTests(PostgresFixture fixture) : DatabaseTest(fixture) { ... }
+```
+
+*Persistence*: simpan dengan satu context, baca dengan context baru
+```csharp
+await using (var write = NewContext())
+{
+    write.Courses.Add(course);       // mentor dan sessions ikut tersimpan lewat relasi
+    await write.SaveChangesAsync();
+}
+await using var read = NewContext();
+var saved = await read.Courses.Include(c => c.Mentor).Include(c => c.Sessions).SingleAsync();
+Assert.True(saved.Id > 0);           // Id dibuat oleh PostgreSQL
+Assert.Equal(2, saved.Sessions.Count);
+```
+
+*Migrations*: jalankan migration ke database kosong, lalu cek tabel
+```csharp
+var cs = new NpgsqlConnectionStringBuilder(Fixture.ConnectionString) { Database = "bimbel_from_scratch" }.ConnectionString;
+await using var context = PostgresFixture.CreateContext(cs);
+await context.Database.MigrateAsync();
+
+var tables = await context.Database
+    .SqlQueryRaw<string>("SELECT table_name AS \"Value\" FROM information_schema.tables WHERE table_schema = 'public'")
+    .ToListAsync();
+Assert.Contains("mentors", tables);
+```
+Deteksi migration yang terlupa: `Assert.False(context.Database.HasPendingModelChanges());`
+
+*Mapping*: tanya PostgreSQL tipe kolom aslinya
+```csharp
+[Theory]
+[InlineData("courses", "Price", "numeric(12,2)")]
+[InlineData("course_sessions", "StartTime", "timestamp with time zone")]
+[InlineData("enrollments", "Status", "character varying(20)")]
+public async Task Column_has_the_expected_postgres_type(string table, string column, string expectedType)
+{
+    await using var context = NewContext();
+    var actualType = await context.Database.SqlQueryRaw<string>(
+        """
+        SELECT format_type(a.atttypid, a.atttypmod) AS "Value"
+        FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        WHERE c.relname = {0} AND a.attname = {1} AND c.relnamespace = 'public'::regnamespace
+        """, table, column).SingleAsync();
+    Assert.Equal(expectedType, actualType);
+}
+```
+
+*Relationships*: hapus mentor yang masih punya course harus ditolak
+```csharp
+delete.Mentors.Remove(mentorToDelete);
+var error = await AssertViolationAsync(() => delete.SaveChangesAsync());
+Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, error.SqlState);   // 23503
+```
+Untuk cascade: hapus `Course`, lalu pastikan `CourseSession` dan `Enrollment` miliknya hilang sementara `Mentor` dan `Student` tetap ada
+
+*Constraints*: database harus menolak data tidak valid.
+```csharp
+// Unique: email mentor kembar
+var error = await AssertViolationAsync(() => second.SaveChangesAsync());
+Assert.Equal(PostgresErrorCodes.UniqueViolation, error.SqlState);       // 23505
+
+// Check: durasi sesi 0 atau negatif
+var error = await AssertViolationAsync(() => write.SaveChangesAsync());
+Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);        // 23514
+```
+Kode lengkap semua test ada di `PersistenceTests.cs` dan `ConstraintTests.cs`
+
+**Langkah 8. Skenario gagal** Test ini sengaja merah karena menyimpan sesi berdurasi `-45` tanpa menangani constraint:
+```csharp
+write.CourseSessions.Add(invalidSession);   // DurationMinutes = -45
+await write.SaveChangesAsync();             // melempar DbUpdateException -> FAILED
+```
+Perbaikannya test `Session_dengan_durasi_nol_atau_negatif_ditolak_oleh_check_constraint`: ia mengharapkan penolakan database dan memeriksa SQLSTATE `23514`
+
+## 5. Cara Menjalankan
+
+Pastikan Docker Desktop menyala, lalu jalankan dari direktori root:
+
+| Tujuan | Perintah |
+|---|---|
+| Semua test normal | `dotnet test --filter "FullyQualifiedName!~Demo_SkenarioGagal"` |
+| Hanya skenario demo gagal | `dotnet test --filter "FullyQualifiedName~Demo_SkenarioGagal"` |
+| Semua test termasuk demo | `dotnet test` |
+| Persistence, Migrations, Mapping | `dotnet test --filter "FullyQualifiedName~PersistenceTests"` |
+| Relationships & Constraints | `dotnet test --filter "FullyQualifiedName~ConstraintTests&FullyQualifiedName!~Demo_SkenarioGagal"` |
+
+Total **26 test**: 25 normal dan 1 demo gagal yang disengaja
+
+## 6. Hasil yang Diharapkan
+
+Test normal:
 ```text
-.
-├── BimbelTesting.slnx                    # Solution file
-├── README.md                             # Dokumentasi proyek & panduan pengujian
-├── src/
-│   └── Bimbel.Data/                      # Proyek EF Core & Entities
-│       ├── Configurations/               # Entity type configurations & Fluent API
-│       │   ├── CourseConfiguration.cs
-│       │   ├── CourseSessionConfiguration.cs
-│       │   ├── EnrollmentConfiguration.cs
-│       │   ├── MentorConfiguration.cs
-│       │   └── StudentConfiguration.cs
-│       ├── Entities/                     # Entity Model C#
-│       │   ├── Course.cs
-│       │   ├── CourseSession.cs
-│       │   ├── Enrollment.cs
-│       │   ├── EnrollmentStatus.cs
-│       │   ├── Mentor.cs
-│       │   └── Student.cs
-│       ├── Migrations/                   # EF Core Code-First Migrations
-│       └── BimbelDbContext.cs
-└── tests/
-    └── Bimbel.Data.Tests/                # Proyek Unit/Integration Test (xUnit)
-        ├── Infrastructure/               # Testcontainers & Shared Database Fixture
-        │   ├── DatabaseTest.cs           # Base class test: isolasi data lewat TRUNCATE
-        │   ├── PostgresFixture.cs        # Pengelola siklus hidup single container PostgreSQL
-        │   └── TestData.cs               # Helper factory data dummy
-        ├── PersistenceTests.cs           # Test Persistence, Migrations, Mapping (KADEK)
-        └── ConstraintTests.cs            # Test Relationships, Constraints & Demo Gagal (DANEN)
+Passed!  - Failed: 0, Passed: 25, Skipped: 0, Total: 25
 ```
 
----
+Skenario gagal:
+```text
+Failed!  - Failed: 1, Passed: 0, Skipped: 0, Total: 1
 
-## 🗄️ Skema Database & Relasi (ERD)
-
-Sistem terdiri dari 5 tabel utama dengan aturan relasi dan constraint sebagai berikut:
-
-```mermaid
-erDiagram
-    MENTORS ||--o{ COURSES : "has (Restrict Delete)"
-    COURSES ||--o{ COURSE_SESSIONS : "has (Cascade Delete)"
-    COURSES ||--o{ ENROLLMENTS : "has (Cascade Delete)"
-    STUDENTS ||--o{ ENROLLMENTS : "has (Cascade Delete)"
-
-    MENTORS {
-        int Id PK
-        string Name "varchar(100)"
-        string Email "varchar(150), UNIQUE"
-    }
-
-    COURSES {
-        int Id PK
-        string Name "varchar(150)"
-        string Description "varchar(1000), Nullable"
-        numeric Price "numeric(12,2)"
-        int MentorId FK
-    }
-
-    COURSE_SESSIONS {
-        int Id PK
-        string Topic "varchar(200)"
-        timestamp StartTime "timestamptz"
-        int DurationMinutes "CHECK > 0"
-        int CourseId FK
-    }
-
-    STUDENTS {
-        int Id PK
-        string FullName "varchar(100)"
-        string Email "varchar(150), UNIQUE"
-        timestamp RegisteredAt "timestamptz"
-    }
-
-    ENROLLMENTS {
-        int Id PK
-        int StudentId FK "UNIQUE(StudentId, CourseId)"
-        int CourseId FK "UNIQUE(StudentId, CourseId)"
-        string Status "varchar(20)"
-        timestamp EnrolledAt "timestamptz"
-    }
+Microsoft.EntityFrameworkCore.DbUpdateException : An error occurred while saving the entity changes.
+---- Npgsql.PostgresException : 23514: new row for relation "course_sessions"
+     violates check constraint "ck_course_sessions_duration_positive"
 ```
 
-### Aturan Constraint Utama:
-1. **Primary & Foreign Key**: Menjaga integritas referensial antar entitas.
-2. **Restrict Delete**: Menghapus `Mentor` ditolak jika masih mengampu `Course`.
-3. **Cascade Delete**: Menghapus `Course` otomatis menghapus semua `CourseSession` dan `Enrollment` miliknya. Menghapus `Student` otomatis menghapus riwayat `Enrollment`-nya.
-4. **Unique Constraints**:
-   - `mentors.Email` & `students.Email` wajib unik.
-   - Composite Unique `(StudentId, CourseId)` mencegah siswa mendaftar ke kursus yang sama 2 kali.
-5. **Check Constraint**: `DurationMinutes > 0` pada tabel `course_sessions`.
+Semua test (`dotnet test`): 25 Passed, 1 Failed (test demo)
 
----
+Selama test berjalan, container `postgres:16-alpine` muncul di Docker Desktop lalu hilang otomatis setelah selesai. Run pertama bisa beberapa menit karena mengunduh image
 
-## ⚙️ Arsitektur & Pola Pengujian
-
-1. **Satu Container untuk Semua Pengujian (`PostgresFixture`)**:
-   Menggunakan `ICollectionFixture<PostgresFixture>` via xUnit agar container PostgreSQL hanya dinyalakan satu kali di awal sesi pengujian. Hal ini membuat runtime test jauh lebih cepat dan hemat sumber daya.
-2. **Isolasi Data Antar Test (`DatabaseTest.cs`)**:
-   Sebelum tiap metode test dijalankan, perintah SQL `TRUNCATE TABLE ... RESTART IDENTITY CASCADE` dijalankan secara otomatis. Dengan begitu, tiap test dimulai dari kondisi tabel bersih tanpa saling memengaruhi (*zero side-effects*).
-3. **Fresh DbContext (`NewContext()`)**:
-   Pengujian selalu memakai instance `DbContext` baru saat melakukan pembacaan (*assertion*) untuk memastikan data diambil langsung dari PostgreSQL, bukan dari cache internal EF Core (*ChangeTracker*).
-4. **Assertion Error Postgres Asli (`AssertViolationAsync`)**:
-   Memastikan kegagalan operasi database berasal dari exception `Npgsql.PostgresException` dengan kode SQLSTATE standar (seperti `23503` untuk FK, `23505` untuk Unique, dan `23514` untuk Check Violation).
-
----
-
-## 🚀 Instalasi & Build
-
-1. Clone repositori dan masuk ke direktori:
-   ```bash
-   git clone https://github.com/DolphinSan/PPL_DatabaseLayerTesting.git
-   cd PPL_DatabaseLayerTesting
-   ```
-2. Restore paket NuGet:
-   ```bash
-   dotnet restore
-   ```
-3. Kompilasi kode:
-   ```bash
-   dotnet build
-   ```
-
----
-
-## 🧪 Prosedur & Cara Menjalankan Test
-
-Jalankan perintah berikut dari direktori root proyek:
-
-### 1. Menjalankan Seluruh Test Normal (Semua Hijau / Passed)
-Gunakan filter ini untuk mengecualikan skenario demo gagal:
-```bash
-dotnet test --filter "FullyQualifiedName!~Demo_SkenarioGagal"
-```
-> **Hasil**: Sebanyak 25 pengujian akan dijalankan dan semuanya berstatus **Passed** (Hijau).
-
----
-
-### 2. Menjalankan Skenario Demo Gagal (Merah / Failed)
-Khusus untuk demonstrasi saat presentasi bahwa Check Constraint benar-benar menghentikan data tidak valid:
-```bash
-dotnet test --filter "FullyQualifiedName~Demo_SkenarioGagal"
-```
-> **Hasil**: Test runner akan menampilkan status **Failed** (Merah) dengan pesan `PostgresException: 23514: new row for relation "course_sessions" violates check constraint "ck_course_sessions_duration_positive"`.
-
----
-
-### 3. Menjalankan Berdasarkan File Pengujian
-
-- **Hanya Bagian KADEK (Persistence, Migrations, Mapping)**:
-  ```bash
-  dotnet test --filter "FullyQualifiedName~PersistenceTests"
-  ```
-- **Hanya Bagian DANEN (Constraints & Relationships yang Lulus)**:
-  ```bash
-  dotnet test --filter "FullyQualifiedName~ConstraintTests&FullyQualifiedName!~Demo_SkenarioGagal"
-  ```
-
----
-
-### 4. Menjalankan Seluruh Test Sekaligus Termasuk Demo
-```bash
-dotnet test
-```
-*(Total 26 test: 25 Passed, 1 Failed)*
-
----
-
-## 📊 Cakupan Pengujian
-
-### A. Bagian KADEK (`PersistenceTests.cs`)
-Fokus pada persistensi data, migrasi skema, dan pemetaan tipe data PostgreSQL:
-- `Save_graph_then_read_it_back_with_a_new_context`: Menyimpan relasi Course -> Mentor & Sessions sekaligus.
-- `Update_is_persisted`: Memastikan operasi update tersimpan permanen di database.
-- `Delete_removes_the_row`: Memastikan operasi delete benar-benar menghapus baris di PostgreSQL.
-- `Migrations_build_the_whole_schema_from_an_empty_database`: Membangun seluruh tabel dari database kosong via EF Migrations.
-- `Every_migration_in_the_code_has_been_applied`: Memverifikasi kesesuaian migrasi di kode dengan tabel `__EFMigrationsHistory`.
-- `Model_has_no_changes_that_are_missing_a_migration`: Mendeteksi jika ada entity yang diubah tetapi belum dibuatkan file migrasinya.
-- `Column_has_the_expected_postgres_type`: Memeriksa tipe data native kolom di PostgreSQL (`numeric(12,2)`, `timestamptz`, `varchar(20)`).
-- `Price_is_rounded_to_two_decimals_by_numeric_12_2`: Memverifikasi pembulatan presisi harga 2 desimal.
-- `Enrollment_status_is_stored_as_text_not_a_number`: Memverifikasi enum disimpan sebagai text/string bukan angka.
-- `Utc_datetime_round_trips_unchanged_through_timestamptz`: Memverifikasi persistensi zona waktu UTC pada kolom `timestamptz`.
-
-### B. Bagian DANEN (`ConstraintTests.cs`)
-Fokus pada integritas referensial, constraint database, dan relasi:
-- **Foreign Key**:
-  - `Course_dengan_mentor_yang_tidak_ada_ditolak_oleh_foreign_key` (`23503`)
-  - `Enrollment_dengan_student_atau_course_tidak_valid_ditolak_oleh_foreign_key` (`23503`)
-  - `Session_dengan_course_tidak_valid_ditolak_oleh_foreign_key` (`23503`)
-- **Unique Constraint**:
-  - `Dua_mentor_dengan_email_sama_ditolak_oleh_unique_index` (`23505`)
-  - `Dua_student_dengan_email_sama_ditolak_oleh_unique_index` (`23505`)
-  - `Student_mendaftar_ke_course_yang_sama_dua_kali_ditolak_oleh_unique_index` (`23505`)
-- **Cascade Delete**:
-  - `Menghapus_course_menghapus_semua_sessions_dan_enrollments_terkait`: Menghapus Course ikut menghapus Sessions & Enrollments.
-  - `Menghapus_student_menghapus_semua_enrollment_siswa_tersebut`: Menghapus Student ikut menghapus entri Enrollments.
-- **Restrict Delete**:
-  - `Menghapus_mentor_yang_masih_memiliki_course_ditolak_oleh_restrict`: Ditolak jika mentor masih punya kursus.
-  - `Menghapus_mentor_yang_tidak_memiliki_course_diizinkan`: Dihapus dengan sukses jika sudah tidak ada relasi kursus.
-- **Check Constraint**:
-  - `Session_dengan_durasi_nol_atau_negatif_ditolak_oleh_check_constraint` (`23514` pada durasi `0` dan `-15`)
-  - `Session_dengan_durasi_positif_berhasil_disimpan`: Sukses menyimpan durasi valid (`120` menit).
-- **Skenario Demo Gagal**:
-  - `Demo_SkenarioGagal_MemasukkanDurasiSesiTidakValid_TanpaMenanganiConstraint`: Mensimulasikan aplikasi yang tidak menangani check constraint sehingga test berstatus **FAILED** (Merah).
+Kode error PostgreSQL yang diverifikasi: `23503` (foreign key), `23505` (unique), `23514` (check)
